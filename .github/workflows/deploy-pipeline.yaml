@@ -1,0 +1,63 @@
+name: deploy-pipeline
+run-name: ${{ github.repository }} deploy pipeline
+on:
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        type: string
+        description: Image Tag
+        default: latest
+      helm-chart:
+        type: string
+        description: Helm Chart
+        default: ./k8s-nodejs-0.0.1.tgz
+      cluster:
+        type: string
+        description: Name of cluster to deploy to
+      aws-region:
+        type: string
+        description: AWS region where the cluster is
+        default: ap-southeast-2 
+
+env:
+  IMAGE_HOST: ghcr.io
+  AWS_REGION: ${{ github.event.inputs.aws-region }}
+  IMAGE_PATH: ${{ github.repository }}
+  IMAGE_TAG: ${{ github.event.inputs.image-tag }}
+  APP_NAME: ${{ github.event.repository.name }}
+  HELM_CHART: ${{ github.event.inputs.helm-chart }}
+  EKS_CLUSTER_NAME: ${{ github.event.inputs.cluster }}
+
+jobs:
+  deploy-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kube config
+        run: aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+      - uses: actions/checkout@v4
+        name: checkout helm repo
+        with:
+          repository: IntegrationWorks/helm-packaged-charts
+          token: ${{ secrets.HELM_READ_ACCESS_TOKEN }} 
+
+      - id: lower-case-vars
+        run: |
+          image_full=${{ env.IMAGE_HOST }}/${{ env.IMAGE_PATH }}
+          app=${{ env.APP_NAME }}
+          echo "image=${image_full,,}" >> $GITHUB_OUTPUT
+          echo "release_name=${app,,}" >> $GITHUB_OUTPUT
+          
+      - name: Deploy
+        run: |
+          helm upgrade -i \
+          ${{ steps.lower-case-vars.outputs.release_name  }} ${{ env.HELM_CHART }} \
+          --set image.name=${{ steps.lower-case-vars.outputs.image }} \
+          --set image.tag=${{ env.IMAGE_TAG }} --wait
